@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SMOTE Data Generator</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.6.0/math.min.js"></script>
+    <style>
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 20px;
+        }
+        table, th, td {
+            border: 1px solid black;
+        }
+        th, td {
+            text-align: left;
+            padding: 8px;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .input-section {
+            margin-bottom: 20px;
+        }
+        .result-section {
+            margin-top: 30px;
+        }
+    </style>
+</head>
+<body>
+    <h1>SMOTE Data Generator</h1>
+
+    <!-- Input Section -->
+    <div class="input-section">
+        <p>
+            This tool generates synthetic data for imbalanced datasets using the SMOTE technique. 
+            Upload your data file, specify the target class column, and define the number of synthetic samples to generate. 
+            The result table will display the synthetic data below.
+        </p>
+
+        <!-- File Upload -->
+        <label for="fileInput"><b>Step 1: Upload Your File (Excel or CSV):</b></label>
+        <input type="file" id="fileInput" accept=".xlsx, .csv">
+        <p><i>Upload your dataset containing numeric features and a target class column. The tool supports Excel (.xlsx) and CSV (.csv) files.</i></p>
+        <br>
+
+        <!-- Target Column -->
+        <label for="targetColumn"><b>Step 2: Specify Target Class Column Name:</b></label>
+        <input type="text" id="targetColumn" placeholder="e.g., Class">
+        <p><i>Enter the exact name of the column representing the target class (e.g., "Class" or "Target").</i></p>
+        <br>
+
+        <!-- Number of Synthetic Samples -->
+        <label for="numSynthetic"><b>Step 3: Enter Number of Synthetic Samples:</b></label>
+        <input type="number" id="numSynthetic" placeholder="e.g., 100">
+        <p><i>Enter the number of synthetic samples to generate for the minority class.</i></p>
+        <br>
+
+        <!-- Generate Button -->
+        <button onclick="generateSyntheticData()">Generate Synthetic Data</button>
+    </div>
+
+    <!-- Result Section -->
+    <div class="result-section">
+        <h2>Generated Synthetic Data</h2>
+        <p>
+            The table below shows the synthetic data generated using the SMOTE technique:
+            <ul>
+                <li>Numeric features are interpolated between randomly selected samples.</li>
+                <li>Binary features (e.g., 0/1 or 1/2) are rounded to maintain valid values.</li>
+                <li>The target column retains the minority class value.</li>
+            </ul>
+        </p>
+        <div id="tableContainer"></div>
+    </div>
+
+    <script>
+        let originalData;
+
+        // Function to read the uploaded file (Excel or CSV)
+        document.getElementById('fileInput').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            const fileName = file.name;
+            const fileExtension = fileName.split('.').pop().toLowerCase();
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                if (fileExtension === 'xlsx') {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                    originalData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
+                } else if (fileExtension === 'csv') {
+                    const csvData = e.target.result;
+                    const rows = csvData.split('\n').map(row => row.split(','));
+                    originalData = rows;
+                } else {
+                    alert("Unsupported file format. Please upload an Excel or CSV file.");
+                }
+            };
+
+            if (fileExtension === 'xlsx') {
+                reader.readAsArrayBuffer(file);
+            } else if (fileExtension === 'csv') {
+                reader.readAsText(file);
+            }
+        });
+
+        function generateSyntheticData() {
+            if (!originalData) {
+                alert("Please upload a file first.");
+                return;
+            }
+
+            const targetColumn = document.getElementById('targetColumn').value;
+            const numSynthetic = parseInt(document.getElementById('numSynthetic').value);
+
+            if (!targetColumn || !numSynthetic || numSynthetic <= 0) {
+                alert("Please specify a valid target column and number of synthetic samples.");
+                return;
+            }
+
+            const header = originalData[0];
+            const targetIndex = header.indexOf(targetColumn);
+
+            if (targetIndex === -1) {
+                alert(`Target column "${targetColumn}" not found in the dataset.`);
+                return;
+            }
+
+            const data = originalData.slice(1).filter(row => row.length > 0); // Remove empty rows
+
+            // Automatically detect numeric feature columns (excluding the target column)
+            const numericColumns = detectNumericColumns(data, targetIndex);
+            const binaryColumns = detectBinaryColumns(data, numericColumns);
+
+            if (numericColumns.length === 0) {
+                alert("No numeric feature columns detected.");
+                return;
+            }
+
+            const minorityClass = findMinorityClass(data, targetIndex);
+            const minorityData = data.filter(row => row[targetIndex] == minorityClass);
+
+            const syntheticData = createSyntheticSamples(minorityData, numSynthetic, numericColumns, binaryColumns, targetIndex);
+
+            // Display synthetic data
+            displayTable(header, syntheticData);
+        }
+
+        function detectNumericColumns(data, targetIndex) {
+            const numRows = data.length;
+            const numCols = data[0].length;
+            const numericColumns = [];
+
+            for (let col = 0; col < numCols; col++) {
+                if (col === targetIndex) continue; // Skip target column
+                let isNumeric = true;
+                for (let row = 0; row < numRows; row++) {
+                    if (isNaN(parseFloat(data[row][col]))) {
+                        isNumeric = false;
+                        break;
+                    }
+                }
+                if (isNumeric) numericColumns.push(col);
+            }
+            return numericColumns;
+        }
+
+        function detectBinaryColumns(data, numericColumns) {
+            const binaryColumns = [];
+            numericColumns.forEach(col => {
+                const uniqueValues = new Set(data.map(row => parseFloat(row[col])));
+                if (uniqueValues.size === 2) {
+                    binaryColumns.push(col);
+                }
+            });
+            return binaryColumns;
+        }
+
+        function findMinorityClass(data, targetIndex) {
+            const classCounts = {};
+            data.forEach(row => {
+                const label = row[targetIndex];
+                classCounts[label] = (classCounts[label] || 0) + 1;
+            });
+            return Object.keys(classCounts).reduce((a, b) => (classCounts[a] < classCounts[b] ? a : b));
+        }
+
+        function createSyntheticSamples(minorityData, numSynthetic, featureIndices, binaryColumns, targetIndex) {
+            const syntheticSamples = [];
+            for (let i = 0; i < numSynthetic; i++) {
+                const idx1 = Math.floor(Math.random() * minorityData.length);
+                const idx2 = Math.floor(Math.random() * minorityData.length);
+                const sample1 = minorityData[idx1];
+                const sample2 = minorityData[idx2];
+
+                const syntheticSample = sample1.map((value, index) => {
+                    if (index === targetIndex) return value; // Keep the target column value
+                    if (featureIndices.includes(index)) {
+                        const randomFactor = Math.random();
+                        let syntheticValue = parseFloat(value) + randomFactor * (parseFloat(sample2[index]) - parseFloat(value));
+                        if (binaryColumns.includes(index)) {
+                            syntheticValue = Math.round(syntheticValue);
+                        }
+                        return syntheticValue;
+                    }
+                    return value;
+                });
+
+                syntheticSamples.push(syntheticSample);
+            }
+            return syntheticSamples;
+        }
+
+        function displayTable(header, data) {
+            const container = document.getElementById('tableContainer');
+            container.innerHTML = ""; // Clear previous table
+
+            const table = document.createElement('table');
+            const thead = document.createElement('thead');
+            const tbody = document.createElement('tbody');
+
+            const headerRow = document.createElement('tr');
+            header.forEach(col => {
+                const th = document.createElement('th');
+                th.textContent = col;
+                headerRow.appendChild(th);
+            });
+            thead.appendChild(headerRow);
+
+            data.forEach(row => {
+                const tr = document.createElement('tr');
+                row.forEach(cell => {
+                    const td = document.createElement('td');
+                    td.textContent = cell;
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+
+            table.appendChild(thead);
+            table.appendChild(tbody);
+            container.appendChild(table);
+        }
+    </script>
+</body>
+</html>
